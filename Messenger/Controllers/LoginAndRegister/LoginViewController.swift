@@ -6,7 +6,9 @@
 //
 
 import UIKit
+import Firebase
 import FirebaseAuth
+import GoogleSignIn
 
 class LoginViewController: UIViewController {
     
@@ -60,10 +62,22 @@ class LoginViewController: UIViewController {
     
     private let label: UILabel = {
         let label = UILabel()
-        label.text = "─────────  OR  ─────────";
+        label.text = "OR";
         label.textColor = .lightGray
-        label.textAlignment = .center
+        label.backgroundColor = .white
         return label
+    }()
+    
+    private let leftLine: UIView = {
+        let leftLine = UIView()
+        leftLine.backgroundColor = .lightGray
+        return leftLine
+    }()
+    
+    private let rightLine: UIView = {
+        let rightLine = UIView()
+        rightLine.backgroundColor = .lightGray
+        return rightLine
     }()
     
     private let imageView: UIImageView = {
@@ -72,15 +86,44 @@ class LoginViewController: UIViewController {
         imageView.contentMode = .scaleAspectFit
         return imageView
     }()
+        
+    private let googleLogInButton: UIButton = {
+        let button = UIButton()
+        button.backgroundColor = .white
+        button.layer.borderWidth = 1
+        button.layer.borderColor = UIColor.lightGray.cgColor
+        button.setImage(UIImage(named: "googleIcon"), for: .normal)
+        button.setTitle("Sign in with Google", for: .normal)
+        button.imageEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        button.titleEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: -10)
+        button.contentEdgeInsets = UIEdgeInsets(top: 0, left: -85, bottom: 0, right: 0)
+        button.setTitleColor(.systemGray, for: .normal)
+        button.layer.cornerRadius = 12
+        button.layer.masksToBounds = true
+        button.titleLabel?.font = .systemFont(ofSize: 20, weight: .bold)
+        return button
+    }()
+    
+    private var loginObserver: NSObjectProtocol?
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        loginObserver = NotificationCenter.default.addObserver(forName: .didLogInNotification, object: nil, queue: .main, using: { [weak self] _ in
+            guard let strongSelf = self else {
+                return
+            }
+            
+            strongSelf.navigationController?.dismiss(animated: true, completion: nil)
+            
+        })
+        
         title = "Log in"
         view.backgroundColor = .white
-        
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Register", style: .done, target: self, action: #selector(didTapRegister))
         
         loginButton.addTarget(self, action: #selector(loginButtonTapped), for: .touchUpInside)
+        googleLogInButton.addTarget(self, action: #selector(setupGoogle), for: .touchUpInside)
         
         emailField.delegate = self
         passwordField.delegate = self
@@ -91,7 +134,16 @@ class LoginViewController: UIViewController {
         scrollView.addSubview(emailField)
         scrollView.addSubview(passwordField)
         scrollView.addSubview(loginButton)
+        scrollView.addSubview(leftLine)
         scrollView.addSubview(label)
+        scrollView.addSubview(rightLine)
+        scrollView.addSubview(googleLogInButton)
+    }
+    
+    deinit {
+        if let observer = loginObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
     
     override func viewDidLayoutSubviews() {
@@ -102,7 +154,11 @@ class LoginViewController: UIViewController {
         emailField.frame = CGRect(x: 30, y: imageView.bottom+30, width: scrollView.width-60, height: 52)
         passwordField.frame = CGRect(x: 30, y: emailField.bottom+10, width: scrollView.width-60, height: 52)
         loginButton.frame = CGRect(x: 30, y: passwordField.bottom+10, width: scrollView.width-60, height: 52)
-        label.frame = CGRect(x: 30, y: loginButton.bottom+10, width: scrollView.width-60, height: 30)
+        label.frame = CGRect(x: (scrollView.width-60)/2, y: loginButton.bottom+5, width: 50, height: 30)
+        label.textAlignment = .center
+        leftLine.frame = CGRect(x: 30, y: loginButton.bottom+20, width: (scrollView.width-60)/2 - 35, height: 1)
+        rightLine.frame = CGRect(x: (scrollView.width-60)/2 + 55, y: loginButton.bottom+20, width: (scrollView.width-60-50)/2, height: 1)
+        googleLogInButton.frame = CGRect(x: 30, y: leftLine.bottom+20, width: scrollView.width-60, height: 52)
     }
     
     @objc private func loginButtonTapped() {
@@ -140,6 +196,57 @@ class LoginViewController: UIViewController {
         let vc = RegisterViewController()
         vc.title = "Create Account"
         navigationController?.pushViewController(vc, animated: true)
+    }
+    
+    @objc func setupGoogle() {
+        
+        guard let clientID = FirebaseApp.app()?.options.clientID else { return }
+
+        // Create Google Sign In configuration object.
+        let config = GIDConfiguration(clientID: clientID)
+
+        // Start the sign in flow!
+        GIDSignIn.sharedInstance.signIn(with: config, presenting: self) { [unowned self] user, error in
+
+          if let error = error {
+              print("Error because \(error.localizedDescription)")
+            return
+          }
+            
+            print("Did sign in with Google: \(String(describing: user))")
+            
+            guard let email = user?.profile?.email,
+                  let firstName = user?.profile?.givenName,
+                  let lastName = user?.profile?.familyName else {
+                      return
+                  }
+            
+            DatabaseManager.shared.userExists(with: email, completion: { exists in
+                if !exists {
+                    // insert to database
+                    DatabaseManager.shared.insertUser(with: ChatAppUser(firstName: firstName, lastName: lastName, emailAddress: email))
+                }
+            })
+
+          guard
+            let authentication = user?.authentication,
+            let idToken = authentication.idToken
+          else {
+              print("Missing auth object off of google user")
+            return
+          }
+
+          let credential = GoogleAuthProvider.credential(withIDToken: idToken,
+                                                         accessToken: authentication.accessToken)
+            Firebase.Auth.auth().signIn(with: credential, completion: { authResult, error in
+                guard authResult !=  nil, error == nil else {
+                    print("failed to log in with google credential")
+                    return
+                }
+                print("Successful sign in!")
+                NotificationCenter.default.post(name: .didLogInNotification, object: nil)
+            })
+        }
     }
     
 }
